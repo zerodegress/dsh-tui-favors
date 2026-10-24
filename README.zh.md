@@ -1,8 +1,8 @@
 # dsh-tui-favors
 
-给 dsh-TUI 钉住「开新对话时的四个默认值」：**模型路由、推理强度、agent preset、权限模式**。
+给 dsh-TUI 钉住「启动时的四个默认值」：**模型路由、推理强度、agent preset、权限模式**。
 
-装好之后，每次启动 dsh-TUI、每次 `/new`，对话都从你指定的这四个值开始——即使上一次会话里用 `/model`、`/effort`、`/preset`、`/permission` 换过别的，下一个对话也会自动回到你钉住的那组。
+装好之后，每次启动 dsh-TUI 都从你指定的这四个值开始——即使上一次会话里用 `/model`、`/effort`、`/preset`、`/permission` 换过别的。打开 `pin: true` 才会把这条保证扩展到同一次运行里的每个 `/new`（见下文）。
 
 ## 它是怎么做到的
 
@@ -15,7 +15,7 @@ dsh-TUI 自己就把这四项的「标准默认值」放在四个持久化文件
 | preset | `~/.dsh-tui/agent-preset.json` `{preset}` | 启动 + 每次 `/new` |
 | 权限模式 | `~/.dsh-tui/permission.json` `{permission}` | 每次会话绑定（只对「自己没选过权限面」的新会话生效，走官方 `/permission` 路径） |
 
-这四个文件本来是「上一次的选择」记忆：你用 `/model` 挑个别的，文件就被改写。**本插件把这份记忆变成固定偏好**——启动时写入你的收藏值，并在 `pin` 模式下持续把它改回去，于是任何新对话都会落在收藏值上。
+这四个文件本来是「上一次的选择」记忆：你用 `/model` 挑个别的，文件就被改写。**本插件把这份记忆变成固定偏好**——每次启动写入你的收藏值。因为 `/new` 会重新读这些文件，想让同一次运行里的新对话也落在收藏值上，得打开 `pin: true` 让插件持续把它们改回去。
 
 插件是宿主侧的一个 Cordis row，`apply` 里**同步**写完这四个文件。dsh-TUI 的运行时 row 会等整棵 loader 树落定后才去读这些文件，所以收藏值先落地、再被读取，不需要任何拦截或授权。
 
@@ -47,8 +47,8 @@ dsh-TUI 自己就把这四项的「标准默认值」放在四个持久化文件
     effort: max
     preset: standard
     permission: workspace-write
-    pin: true
-    pollMs: 2000
+    # 可选：打开后同一次运行里的每个 /new 也回到收藏值
+    # pin: true
 ```
 
 ### 第 2 层：`~/.dsh-tui/favors.json`（日常改这里）
@@ -66,7 +66,7 @@ dsh-TUI 自己就把这四项的「标准默认值」放在四个持久化文件
 }
 ```
 
-改完**不用重启**：`pin` 模式下一次巡检（默认 2 秒）就会重读并生效。只写一项也合法，没写的键继续用 profile 行里的值。
+改完的生效时机看 `pin`：`pin: true` 时下一次巡检（默认 2 秒）就重读并生效；默认的 `pin: false` 则在下次启动或 `/favors apply` 时读取。只写一项也合法，没写的键继续用 profile 行里的值。
 
 规则：
 
@@ -84,19 +84,19 @@ dsh-TUI 自己就把这四项的「标准默认值」放在四个持久化文件
 | `effort` | 空 | 推理强度 id（`off`/`low`/`medium`/`high`/`xhigh`/`max` 或路由自带的 id）。路由不提供的档位由 dsh-TUI 自己**向下**取最近档，永不向上 |
 | `preset` | 空 | agent preset id（小写字母/数字/连字符） |
 | `permission` | 空 | `read-only` / `workspace-write` / `danger-full-access`；`auto` 是会话级值，永远不会被钉住 |
-| `pin` | `true` | 持续把被改动的文件改回收藏值；`false` = 每次启动只写一次 |
-| `pollMs` | `2000` | `pin` 的检查间隔（最小 250 ms） |
+| `pin` | `false` | 每次启动只写一次；改 `true` 则持续把被改动的文件改回收藏值，让同一次运行里的每个 `/new` 也回到收藏值 |
+| `pollMs` | `2000` | `pin: true` 时的检查间隔（最小 250 ms）；`pin: false` 时无意义 |
 
 **没填的旋钮不会被碰**：只填 `effort` 就只管推理强度，其余三项继续用 dsh-TUI 自己的记忆。
 
-`pin` / `pollMs` 决定的是巡检本身，在启动时读取——从 `favors.json` 改这两项要重启才生效；四个旋钮和 `enabled` 都是热生效。
+`pin` / `pollMs` 决定的是巡检本身，在启动时读取——改这两项要重启才生效；`pin: true` 时四个旋钮和 `enabled` 热生效，`pin: false` 时它们的改动也要等下次启动或 `/favors apply` 才落地。
 
 ## `/favors` 命令
 
 在 TUI 里输入：
 
 - `/favors` 或 `/favors status` — 列出四个旋钮：收藏值、当前文件里的值、是否一致，以及这一项是谁给的（`[favors.json]` / `[profile row]`）；末尾还有 `source:` 一行说明配置文件的状态（没有、生效、被忽略），和压过插件的东西。
-- `/favors apply` — 立刻重读 `favors.json` 并重写这四个文件（不用等 `pollMs`）。
+- `/favors apply` — 立刻重读 `favors.json` 并重写这四个文件（不用等巡检或重启）。
 
 ## 优先级：插件压不过的东西
 
@@ -111,8 +111,8 @@ dsh-TUI 自己就把这四项的「标准默认值」放在四个持久化文件
 
 ## 诚实说明的边界
 
-- **`pin` 会把 dsh-TUI 的「上次选择」记忆变成固定值。** 在会话里 `/model` 换成别的模型，当前会话照常使用新模型，但 2 秒内 `model.json` 会被改回收藏值；于是 `/new` 又回到收藏值，`/reload` 也会把收藏值应用到当前会话。想要一劳永逸换默认值：改上面的 config，或者临时 `pin: false`。
-- **推理强度是「启动级」的。** dsh-TUI 在进程内缓存首选强度，`/new` 沿用内存里的值（这是它自己的设计），所以一次运行内用 `/effort` 改过的档位会持续到下次启动；`effort.json` 已经被插件改回收藏值，重启即恢复。模型 / preset / 权限模式则在每次 `/new` 重新读文件，`pin` 模式下都会被拉回收藏值。
+- **默认 `pin: false`：只保证「每次启动」。** 同一次运行里 `/model` 换掉的模型会留在 `model.json` 里，下一个 `/new` 会沿用它——收藏值要等下次启动（或 `/favors apply`）才回归。想要每次 `/new` 都回到收藏值，设 `pin: true`；代价是会话里的换选会在巡检间隔（默认 2 秒）内被改回，`/reload` 也会把收藏值应用到当前会话。
+- **推理强度是「启动级」的。** dsh-TUI 在进程内缓存首选强度，`/new` 沿用内存里的值（这是它自己的设计），所以一次运行内用 `/effort` 改过的档位会持续到下次启动；`effort.json` 已经被插件改回收藏值，重启即恢复。模型 / preset / 权限模式则在每次 `/new` 重新读文件——`pin: true` 时会被拉回收藏值，默认 `pin: false` 时沿用你在会话里的选择。
 - **`permission.json` 只给「还没自己选过权限面」的新会话打底**，这是 dsh-TUI 的规则；已经用 `/permission` 或 Shift+Tab 选过模式的会话不会被改写。
 - **dsh-TUI 之外的 profile 无意义**：其它前端不读 `~/.dsh-tui/*`，插件在那里只会写几个没人读的文件。别把它装进 Web UI 的 profile。
 

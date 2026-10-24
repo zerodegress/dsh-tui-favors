@@ -60,15 +60,15 @@ test('rejects control characters in effort and keeps the usual tiers', () => {
   assert.equal(resolveConfig({ effort: 'ma\nx' }).favorites.effort, undefined)
 })
 
-test('defaults: enabled, pin on, 2s poll; a bad pollMs falls back', () => {
+test('defaults: enabled, pin off, 2s poll; a bad pollMs falls back', () => {
   const config = resolveConfig(undefined)
   assert.equal(config.enabled, true)
-  assert.equal(config.pin, true)
+  assert.equal(config.pin, false)
   assert.equal(config.pollMs, 2000)
   assert.equal(resolveConfig({ pollMs: 5 }).pollMs, 250)
   assert.equal(resolveConfig({ pollMs: 'nope' }).pollMs, 2000)
   assert.equal(resolveConfig({ enabled: false }).enabled, false)
-  assert.equal(resolveConfig({ pin: false }).pin, false)
+  assert.equal(resolveConfig({ pin: true }).pin, true)
 })
 
 test('never throws on hostile input', () => {
@@ -204,7 +204,7 @@ test('apply writes the favorites and registers /favors', () => {
   process.env.DSH_TUI_FAVORS_DIR = dir
   try {
     const { ctx, registered, effects, logs } = fakeContext()
-    apply(ctx, { provider: 'example', model: 'chat-1', effort: 'max', preset: 'cordis', permission: 'workspace-write', pollMs: 60000 })
+    apply(ctx, { provider: 'example', model: 'chat-1', effort: 'max', preset: 'cordis', permission: 'workspace-write', pin: true, pollMs: 60000 })
     assert.equal(readPref(dir, 'effort'), 'max')
     assert.equal(readPref(dir, 'permission'), 'workspace-write')
     assert.equal(registered.length, 1)
@@ -228,6 +228,23 @@ test('pin:false installs no interval', () => {
     apply(ctx, { effort: 'low', pin: false })
     assert.equal(effects.length, 0)
     assert.equal(readPref(dir, 'effort'), 'low')
+  } finally {
+    if (previous === undefined) delete process.env.DSH_TUI_FAVORS_DIR
+    else process.env.DSH_TUI_FAVORS_DIR = previous
+    dispose()
+  }
+})
+
+test('omitting pin (the default) still writes once at boot', () => {
+  const { dir, dispose } = freshDir()
+  const previous = process.env.DSH_TUI_FAVORS_DIR
+  process.env.DSH_TUI_FAVORS_DIR = dir
+  try {
+    const { ctx, effects, logs } = fakeContext()
+    apply(ctx, { effort: 'low' })
+    assert.equal(effects.length, 0, 'no interval without an explicit pin:true')
+    assert.equal(readPref(dir, 'effort'), 'low')
+    assert.ok(logs.some((line) => line.includes('pinned')))
   } finally {
     if (previous === undefined) delete process.env.DSH_TUI_FAVORS_DIR
     else process.env.DSH_TUI_FAVORS_DIR = previous

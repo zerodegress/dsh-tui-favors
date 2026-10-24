@@ -11,15 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `~/.dsh-tui/favors.json`: a flat, user-owned config file with the same keys as
   the row's `config:` block. It outranks `cordis.patch.yml` knob by knob, is
-  re-read on every `pin` check (no restart needed), and is validated by the same
-  parsers — an unusable value is reported and skipped, leaving the row's value
-  in place instead of un-pinning the knob. A copy-pasted patch row is refused
-  with a hint, `_`-prefixed keys work as comments, and a broken file degrades to
-  the row config with one log line.
+  re-read on every `pin` check (so with `pin: true` edits need no restart), and
+  is validated by the same parsers — an unusable value is reported and skipped,
+  leaving the row's value in place instead of un-pinning the knob. A
+  copy-pasted patch row is refused with a hint, `_`-prefixed keys work as
+  comments, and a broken file degrades to the row config with one log line.
 - `enabled: false` on the profile row is a hard kill switch: the favorites file
   is not read at all, so a user file cannot resurrect a deployment-disabled row.
 - `/favors` marks each knob with the layer that supplied it (`[favors.json]` or
   `[profile row]`) and adds a `source:` line describing the file's state.
+
+### Changed
+
+- `pin` now defaults to `false`: the row writes the favorites once per launch
+  and installs no timer. Set `"pin": true` to restore the continuous check,
+  which is what makes a mid-session `/model` (or `/preset`, `/permission`) get
+  reverted before the next `/new` re-reads the file. `pollMs` only applies with
+  `pin: true`, and without it `favors.json` edits land on the next launch or
+  `/favors apply` instead of the next check.
 
 ## [0.1.0] - 2026-10-24
 

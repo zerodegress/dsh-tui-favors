@@ -1,6 +1,6 @@
-# dsh-tui-favors — one row that pins the four "favorites" every new dsh-TUI
-# conversation starts on: model route, reasoning effort, agent preset and
-# permission mode.
+# dsh-tui-favors — one row that pins the four "favorites" a dsh-TUI launch
+# starts on: model route, reasoning effort, agent preset and permission mode.
+# With the opt-in `pin: true` (see below) it also protects every `/new`.
 #
 # Every key has a default in index.js, so `config:` may be empty. The row is
 # composed by the dsh-tui profile; `apply` writes the preference files
@@ -37,9 +37,11 @@
       config:
         # Master switch: false = write nothing, stay inert.
         enabled: true
-        # Keep restoring the files dsh-TUI rewrites when the user picks
-        # another model/effort/preset/permission, so the next conversation
-        # goes back to the favorites. false = write once per boot.
-        pin: true
+        # Opt-in: keep restoring the files dsh-TUI rewrites when the user picks
+        # another model/effort/preset/permission. `/new` re-reads those files,
+        # so this is what makes the NEXT conversation go back to the favorites
+        # too. false (default) = write once per boot; an in-session pick then
+        # lasts until the next launch.
+        pin: false
         # How often `pin` re-checks the four files (milliseconds, min 250).
         pollMs: 2000

@@ -8,9 +8,10 @@
  * ended" memory: `/model`, `/effort`, `/preset` and `/permission` rewrite them
  * whenever the user picks something else. This plugin makes the deployment's
  * favorites win instead: it writes the four files (only the knobs it was
- * configured with) and, in `pin` mode, restores them whenever another writer
- * changes them, so every new conversation — and every launch — starts on the
- * favorites.
+ * configured with) at mount, so every launch starts on the favorites. With the
+ * opt-in `pin` mode it also restores them whenever another writer changes them,
+ * which extends the guarantee to every `/new` — `/new` re-reads those files, so
+ * without it an in-session pick lasts until the next launch.
  *
  * Configuration comes in two layers with the same shape: this row's `config`
  * in the profile's `cordis.patch.yml`, and an optional
@@ -179,7 +180,10 @@ export function resolveConfig(input) {
     else favorites[knob] = parsed.value
   }
 
-  const pin = raw.pin !== false
+  // `pin` is opt-in: the boot write alone keeps a launch on the favorites, but
+  // only a continuing check can revert a mid-session `/model` (etc.) before the
+  // next `/new` re-reads the file.
+  const pin = raw.pin === true
   const pollRaw = Number(raw.pollMs)
   const pollMs = Number.isFinite(pollRaw) ? Math.max(250, Math.round(pollRaw)) : DEFAULT_POLL_MS
 
@@ -581,8 +585,9 @@ export function renderStatus({ config, dir, running, sources = {}, file }) {
 
 /**
  * Mount the plugin: write the favorites once (before dsh-TUI resolves the boot
- * route) and keep them pinned while the TUI runs. `~/.dsh-tui/favors.json`
- * outranks the row config and is re-read when it changes.
+ * route) and, with `pin: true`, keep them pinned while the TUI runs.
+ * `~/.dsh-tui/favors.json` outranks the row config and is re-read when it
+ * changes.
  * @param ctx - Host Cordis context of this row.
  * @param input - Raw row config.
  */

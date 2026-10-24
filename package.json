@@ -1,7 +1,7 @@
 {
   "name": "dsh-tui-favors",
   "version": "0.1.0",
-  "description": "Fixed favorites for dsh-TUI: every new conversation starts on your pinned model, reasoning effort, agent preset and permission mode.",
+  "description": "Fixed favorites for dsh-TUI: every launch starts on your pinned model, reasoning effort, agent preset and permission mode.",
   "author": "zerodegress",
   "type": "module",
   "main": "index.js",
