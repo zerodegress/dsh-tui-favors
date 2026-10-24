@@ -1,0 +1,39 @@
+# dsh-tui-favors — one row that pins the four "favorites" every new dsh-TUI
+# conversation starts on: model route, reasoning effort, agent preset and
+# permission mode.
+#
+# Every key has a default in index.js, so `config:` may be empty. The row is
+# composed by the dsh-tui profile; `apply` writes the preference files
+# synchronously, so they are in place before dsh-TUI resolves its boot route.
+#
+# Configure the favorites in YOUR profile's cordis.patch.yml instead of here,
+# so a local route stays out of the package:
+#
+#   - id: dsh-tui-favors
+#     name: dsh-tui-favors
+#     config:
+#       provider: <provider>
+#       model: <model-id>
+#       effort: <tier>
+#       preset: <preset-id>
+#       permission: workspace-write
+#
+# Precedence (highest first) — what this plugin CANNOT outrank:
+#   preset      DSH_TUI_PRESET  >  agent-preset.json
+#   permission  DSH_PERMISSION_MODE  >  permission.json
+#   effort      /settings 默认推理强度 (settings.json effortDefault) > effort.json
+#   model       model.json is already the top layer (cordis.yml provider/model
+#               is only the deployment default beneath it)
+# `/favors` reports a note whenever one of those shadows a pinned value.
+- insert:
+    - id: dsh-tui-favors
+      name: dsh-tui-favors
+      config:
+        # Master switch: false = write nothing, stay inert.
+        enabled: true
+        # Keep restoring the files dsh-TUI rewrites when the user picks
+        # another model/effort/preset/permission, so the next conversation
+        # goes back to the favorites. false = write once per boot.
+        pin: true
+        # How often `pin` re-checks the four files (milliseconds, min 250).
+        pollMs: 2000

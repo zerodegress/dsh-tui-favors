@@ -1,0 +1,45 @@
+{
+  "name": "dsh-tui-favors",
+  "version": "0.1.0",
+  "description": "Fixed favorites for dsh-TUI: every new conversation starts on your pinned model, reasoning effort, agent preset and permission mode.",
+  "author": "zerodegress",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "scripts",
+    "README.md",
+    "README.zh.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.19 || >=24"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "check": "node --check index.js",
+    "test": "node --check index.js && node scripts/verify.mjs && node scripts/verify-host.mjs",
+    "verify": "npm test"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-tui",
+    "tui",
+    "plugin",
+    "defaults",
+    "model",
+    "preset",
+    "permission"
+  ],
+  "license": "MIT"
+}
