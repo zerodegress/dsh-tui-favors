@@ -1,6 +1,6 @@
 {
   "name": "dsh-tui-favors",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Fixed favorites for dsh-TUI: every launch starts on your pinned model, reasoning effort, agent preset and permission mode.",
   "author": "zerodegress",
   "type": "module",
