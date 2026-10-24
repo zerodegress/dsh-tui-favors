@@ -18,6 +18,12 @@
 #       preset: <preset-id>
 #       permission: workspace-write
 #
+# ...or in `~/.dsh-tui/favors.json`: flat JSON with these very keys, which
+# outranks this row knob by knob and is re-read on every `pin` check. It is
+# validated by the same parsers; a bad value is reported and skipped, so the
+# row's value stays instead of the knob going unpinned. `enabled: false` below
+# is a kill switch — the file is then not read at all.
+#
 # Precedence (highest first) — what this plugin CANNOT outrank:
 #   preset      DSH_TUI_PRESET  >  agent-preset.json
 #   permission  DSH_PERMISSION_MODE  >  permission.json

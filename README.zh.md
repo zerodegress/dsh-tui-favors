@@ -31,6 +31,10 @@ dsh-TUI 自己就把这四项的「标准默认值」放在四个持久化文件
 
 ## 配置
 
+收藏值有两层，**同一个形状**（同样的键、同样的校验）：`~/.dsh-tui/favors.json` 优先于 profile 里那行的 `config`，逐键覆盖。
+
+### 第 1 层：profile 的 `cordis.patch.yml`
+
 配置写在这个 bundle 的 row 上——在你自己 profile 的 `cordis.patch.yml` 里按 id 覆盖，这样本机路由不会进包：
 
 ```yaml
@@ -47,9 +51,35 @@ dsh-TUI 自己就把这四项的「标准默认值」放在四个持久化文件
     pollMs: 2000
 ```
 
+### 第 2 层：`~/.dsh-tui/favors.json`（日常改这里）
+
+和 `model.json` 那几个文件放在一起，纯 JSON、扁平——就是上面 `config:` 段里的键：
+
+```json
+{
+  "provider": "magpie",
+  "model": "group/cheap-deepseek-v4-1-flash",
+  "effort": "max",
+  "preset": "ptc",
+  "permission": "workspace-write",
+  "_comment": "本机私有，不进 git"
+}
+```
+
+改完**不用重启**：`pin` 模式下一次巡检（默认 2 秒）就会重读并生效。只写一项也合法，没写的键继续用 profile 行里的值。
+
+规则：
+
+- **严格 JSON**（容忍 BOM）；`_` 开头的键当注释；不认 `!!js` 表达式——这里是数据文件，不是 patch。
+- **写错的值不会生效，也不会悄悄顶掉 profile 里的值**：`"effort": 42`、`"preset": "Cordis"` 这种会记一条 problem，并回落到 profile 行。
+- **整行贴进来会被拒**：带 `id`/`name`/`config` 的对象（从 `cordis.patch.yml` 整段复制）会提示「只保留 `config` 里的键」。
+- 不认识拼错的键会报一条（`permision`），但不影响其他键生效。
+- 文件坏了（语法错 / 根不是对象 / 超过 64 KiB）就整份忽略，回落到 profile 行，只记一条日志、不抛错。
+- **profile 行里的 `enabled: false` 是硬开关**：一关，`favors.json` 连读都不读，不能靠它把插件重新打开。
+
 | 键 | 默认 | 含义 |
 | --- | --- | --- |
-| `enabled` | `true` | `false` = 完全不写任何文件 |
+| `enabled` | `true` | `false` = 完全不写任何文件（写在 `favors.json` 里只关自己，写在 profile 行是硬开关） |
 | `provider` + `model` | 空 | 模型路由，**必须成对**；半对会被忽略并记一条 problem |
 | `effort` | 空 | 推理强度 id（`off`/`low`/`medium`/`high`/`xhigh`/`max` 或路由自带的 id）。路由不提供的档位由 dsh-TUI 自己**向下**取最近档，永不向上 |
 | `preset` | 空 | agent preset id（小写字母/数字/连字符） |
@@ -59,16 +89,20 @@ dsh-TUI 自己就把这四项的「标准默认值」放在四个持久化文件
 
 **没填的旋钮不会被碰**：只填 `effort` 就只管推理强度，其余三项继续用 dsh-TUI 自己的记忆。
 
+`pin` / `pollMs` 决定的是巡检本身，在启动时读取——从 `favors.json` 改这两项要重启才生效；四个旋钮和 `enabled` 都是热生效。
+
 ## `/favors` 命令
 
 在 TUI 里输入：
 
-- `/favors` 或 `/favors status` — 列出四个旋钮：收藏值、当前文件里的值、是否一致，以及被谁压制了。
-- `/favors apply` — 立刻重写一遍这四个文件（不用等 `pollMs`）。
+- `/favors` 或 `/favors status` — 列出四个旋钮：收藏值、当前文件里的值、是否一致，以及这一项是谁给的（`[favors.json]` / `[profile row]`）；末尾还有 `source:` 一行说明配置文件的状态（没有、生效、被忽略），和压过插件的东西。
+- `/favors apply` — 立刻重读 `favors.json` 并重写这四个文件（不用等 `pollMs`）。
 
 ## 优先级：插件压不过的东西
 
-这些是 dsh-TUI 的部署/启动级指令，优先级在偏好文件**之上**。`/favors` 会明确提示：
+配置层内部（高 → 低）：`~/.dsh-tui/favors.json` 里**有效**的键 > profile 行的 `config` > 内置默认。`enabled: false` 写在 profile 行时不受这条规则约束（硬开关）。
+
+下面这些是 dsh-TUI 的部署/启动级指令，优先级在偏好文件**之上**。`/favors` 会明确提示：
 
 - **preset**：`DSH_TUI_PRESET` 环境变量 > `agent-preset.json`
 - **权限模式**：`DSH_PERMISSION_MODE` 环境变量 > `permission.json`（dsh-TUI 见到它就完全不读偏好文件）
@@ -101,3 +135,5 @@ cordis.patch.yml         # bundle patch：一行 dsh-tui-favors，带中性默�
 scripts/verify.mjs       # 离线自检
 scripts/verify-host.mjs  # 与真实 dsh-TUI 读取器的交叉验证
 ```
+
+运行时还会读 `~/.dsh-tui/favors.json`（用户自己的文件，不入包、不进 git）。

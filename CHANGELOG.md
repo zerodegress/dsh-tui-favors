@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `~/.dsh-tui/favors.json`: a flat, user-owned config file with the same keys as
+  the row's `config:` block. It outranks `cordis.patch.yml` knob by knob, is
+  re-read on every `pin` check (no restart needed), and is validated by the same
+  parsers — an unusable value is reported and skipped, leaving the row's value
+  in place instead of un-pinning the knob. A copy-pasted patch row is refused
+  with a hint, `_`-prefixed keys work as comments, and a broken file degrades to
+  the row config with one log line.
+- `enabled: false` on the profile row is a hard kill switch: the favorites file
+  is not read at all, so a user file cannot resurrect a deployment-disabled row.
+- `/favors` marks each knob with the layer that supplied it (`[favors.json]` or
+  `[profile row]`) and adds a `source:` line describing the file's state.
+
 ## [0.1.0] - 2026-10-24
 
 ### Added

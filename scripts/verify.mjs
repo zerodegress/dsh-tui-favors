@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { apply, applyFavorites, readPref, renderStatus, resolveConfig } from '../index.js'
+import { apply, applyFavorites, loadConfig, readPref, renderStatus, resolveConfig } from '../index.js'
 
 let failures = 0
 const test = (label, run) => {
@@ -291,6 +291,280 @@ test('status explains an empty config and a disabled row', () => {
   try {
     assert.match(renderStatus({ config: resolveConfig({}), dir, running: true }), /no favorites configured/)
     assert.match(renderStatus({ config: resolveConfig({ enabled: false }), dir, running: false }), /disabled/)
+  } finally {
+    dispose()
+  }
+})
+
+/* ------------------------------------------------------------------ */
+group('favors.json overrides the row')
+
+/** Point the plugin's data directory at `dir` for one run. */
+const withDir = (dir, run) => {
+  const previous = process.env.DSH_TUI_FAVORS_DIR
+  process.env.DSH_TUI_FAVORS_DIR = dir
+  try {
+    return run()
+  } finally {
+    if (previous === undefined) delete process.env.DSH_TUI_FAVORS_DIR
+    else process.env.DSH_TUI_FAVORS_DIR = previous
+  }
+}
+
+const writeFavors = (dir, value) => writeFileSync(join(dir, 'favors.json'), typeof value === 'string' ? value : JSON.stringify(value))
+
+test('a complete file wins knob by knob and is reported as the source', () => {
+  const { dir, dispose } = freshDir()
+  try {
+    writeFavors(dir, {
+      provider: 'file-p',
+      model: 'file-m',
+      effort: 'high',
+      preset: 'minimal',
+      permission: 'read-only',
+    })
+    const { config, sources } = loadConfig(
+      { provider: 'row-p', model: 'row-m', effort: 'low', preset: 'cordis', permission: 'workspace-write' },
+      dir,
+    )
+    assert.deepEqual(config.favorites, {
+      model: { provider: 'file-p', model: 'file-m' },
+      effort: 'high',
+      preset: 'minimal',
+      permission: 'read-only',
+    })
+    for (const knob of ['model', 'effort', 'preset', 'permission']) assert.equal(sources[knob], 'favors.json', knob)
+    assert.deepEqual(config.problems, [])
+  } finally {
+    dispose()
+  }
+})
+
+test('a partial file leaves the other knobs on the row', () => {
+  const { dir, dispose } = freshDir()
+  try {
+    writeFavors(dir, { effort: 'low' })
+    const { config, sources } = loadConfig({ provider: 'row-p', model: 'row-m', preset: 'cordis' }, dir)
+    assert.equal(config.favorites.effort, 'low')
+    assert.deepEqual(config.favorites.model, { provider: 'row-p', model: 'row-m' })
+    assert.equal(config.favorites.preset, 'cordis')
+    assert.equal(sources.effort, 'favors.json')
+    assert.equal(sources.model, 'profile row')
+  } finally {
+    dispose()
+  }
+})
+
+test('invalid JSON falls back to the row and says why', () => {
+  const { dir, dispose } = freshDir()
+  try {
+    writeFavors(dir, '{ oops')
+    const { config, file } = loadConfig({ effort: 'max' }, dir)
+    assert.equal(file.state, 'invalid')
+    assert.equal(config.favorites.effort, 'max')
+    assert.match(config.problems[0], /favors\.json: is not valid JSON/)
+  } finally {
+    dispose()
+  }
+})
+
+test('a copy-pasted patch row is refused with a pointed message', () => {
+  const { dir, dispose } = freshDir()
+  try {
+    writeFavors(dir, { id: 'dsh-tui-favors', name: 'dsh-tui-favors', config: { effort: 'high' } })
+    const { config, file } = loadConfig({ effort: 'max' }, dir)
+    assert.equal(file.state, 'invalid')
+    assert.equal(config.favorites.effort, 'max')
+    assert.match(config.problems[0], /keep only the keys inside it/)
+  } finally {
+    dispose()
+  }
+})
+
+test('unknown keys are reported without blocking the known ones', () => {
+  const { dir, dispose } = freshDir()
+  try {
+    writeFavors(dir, { effort: 'high', permision: 'workspace-write' })
+    const { config } = loadConfig({}, dir)
+    assert.equal(config.favorites.effort, 'high')
+    assert.equal(config.problems.length, 1)
+    assert.match(config.problems[0], /unknown key "permision"/)
+  } finally {
+    dispose()
+  }
+})
+
+test('underscore keys are comments, not config', () => {
+  const { dir, dispose } = freshDir()
+  try {
+    writeFavors(dir, { _comment: 'my favorites', effort: 'high' })
+    const { config } = loadConfig({}, dir)
+    assert.deepEqual(config.problems, [])
+    assert.equal(config.favorites.effort, 'high')
+  } finally {
+    dispose()
+  }
+})
+
+test('a value of the wrong type is ignored and the row value survives', () => {
+  const { dir, dispose } = freshDir()
+  try {
+    writeFavors(dir, { effort: 42 })
+    const { config, sources } = loadConfig({ effort: 'max' }, dir)
+    assert.equal(config.favorites.effort, 'max')
+    assert.equal(sources.effort, 'profile row')
+    assert.match(config.problems[0], /"effort" must be a string/)
+  } finally {
+    dispose()
+  }
+})
+
+test('a semantically invalid file value falls back to the row', () => {
+  const { dir, dispose } = freshDir()
+  try {
+    writeFavors(dir, { preset: 'Cordis' })
+    const { config } = loadConfig({ preset: 'cordis' }, dir)
+    assert.equal(config.favorites.preset, 'cordis')
+    assert.match(config.problems[0], /not a preset id/)
+  } finally {
+    dispose()
+  }
+})
+
+test('a half route in the file never overrides a complete one', () => {
+  const { dir, dispose } = freshDir()
+  try {
+    writeFavors(dir, { provider: 'file-p' })
+    const { config } = loadConfig({ provider: 'row-p', model: 'row-m' }, dir)
+    assert.deepEqual(config.favorites.model, { provider: 'row-p', model: 'row-m' })
+    assert.match(config.problems[0], /must both be filled in/)
+  } finally {
+    dispose()
+  }
+})
+
+test('a BOM parses; an oversized file is refused', () => {
+  const { dir, dispose } = freshDir()
+  try {
+    writeFavors(dir, '\uFEFF' + JSON.stringify({ effort: 'high' }))
+    assert.equal(loadConfig({}, dir).config.favorites.effort, 'high')
+    writeFavors(dir, 'x'.repeat(70 * 1024))
+    const big = loadConfig({ effort: 'max' }, dir)
+    assert.equal(big.file.state, 'invalid')
+    assert.equal(big.config.favorites.effort, 'max')
+    assert.match(big.config.problems[0], /exceeds the 65536-byte limit/)
+  } finally {
+    dispose()
+  }
+})
+
+test('enabled:false in the file stops the writes but keeps /favors usable', () => {
+  const { dir, dispose } = freshDir()
+  try {
+    withDir(dir, () => {
+      writeFavors(dir, { enabled: false, effort: 'max' })
+      const { ctx, registered, logs } = fakeContext()
+      apply(ctx, { effort: 'low', pin: false })
+      assert.equal(readPref(dir, 'effort'), undefined)
+      assert.equal(registered.length, 1)
+      assert.ok(logs.some((line) => line.includes('disabled by favors.json')))
+      const { config, sources, file } = loadConfig({ effort: 'low' }, dir)
+      assert.match(renderStatus({ config, dir, running: false, sources, file }), /disabled by favors\.json/)
+    })
+  } finally {
+    dispose()
+  }
+})
+
+test('the row kill switch ignores the file entirely', () => {
+  const { dir, dispose } = freshDir()
+  try {
+    withDir(dir, () => {
+      writeFavors(dir, { effort: 'high' })
+      const { ctx, registered, logs } = fakeContext()
+      apply(ctx, { enabled: false, effort: 'low' })
+      assert.equal(readPref(dir, 'effort'), undefined)
+      assert.equal(registered.length, 0)
+      assert.ok(logs.some((line) => line.includes('favors.json is not read')))
+    })
+  } finally {
+    dispose()
+  }
+})
+
+/* ------------------------------------------------------------------ */
+group('favors.json hot reload')
+
+/** Swap the real interval for a manually driven ticker. */
+const manualTicker = () => {
+  const timers = []
+  const setIntervalOriginal = globalThis.setInterval
+  const clearIntervalOriginal = globalThis.clearInterval
+  globalThis.setInterval = (callback) => {
+    timers.push(callback)
+    return { unref() {} }
+  }
+  globalThis.clearInterval = () => {}
+  return {
+    tick: () => timers.forEach((timer) => timer()),
+    restore: () => {
+      globalThis.setInterval = setIntervalOriginal
+      globalThis.clearInterval = clearIntervalOriginal
+    },
+  }
+}
+
+const asyncTest = async (label, run) => {
+  try {
+    await run()
+    console.log(`  ok   ${label}`)
+  } catch (error) {
+    failures += 1
+    console.log(`  FAIL ${label}\n       ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+await asyncTest('a pin check picks up an edited file without a restart', () => {
+  const { dir, dispose } = freshDir()
+  const ticker = manualTicker()
+  try {
+    withDir(dir, () => {
+      const { ctx, effects, logs } = fakeContext()
+      apply(ctx, { effort: 'low', pin: true, pollMs: 60000 })
+      assert.equal(readPref(dir, 'effort'), 'low')
+
+      writeFavors(dir, { effort: 'high' })
+      ticker.tick()
+      assert.equal(readPref(dir, 'effort'), 'high')
+      assert.ok(logs.some((line) => line.includes('favors.json reloaded')))
+
+      writeFavors(dir, { effort: 'medium' })
+      ticker.tick()
+      assert.equal(readPref(dir, 'effort'), 'medium')
+
+      // Deleting the file must fall back to the row on the next check.
+      rmSync(join(dir, 'favors.json'))
+      ticker.tick()
+      assert.equal(readPref(dir, 'effort'), 'low')
+      effects.forEach((disposeEffect) => disposeEffect())
+    })
+  } finally {
+    ticker.restore()
+    dispose()
+  }
+})
+
+await asyncTest('/favors reflects a file edited after boot', async () => {
+  const { dir, dispose } = freshDir()
+  try {
+    const result = await withDir(dir, () => {
+      const { ctx, registered } = fakeContext()
+      apply(ctx, { effort: 'low', pin: false })
+      writeFavors(dir, { effort: 'high' })
+      return registered[0].handler({ rawInput: '' })
+    })
+    assert.match(result.text, /effort: high \(differs — restored on the next check\) \[favors\.json\]/)
+    assert.match(result.text, /source: favors\.json \(1 key/)
   } finally {
     dispose()
   }

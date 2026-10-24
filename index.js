@@ -12,6 +12,14 @@
  * changes them, so every new conversation — and every launch — starts on the
  * favorites.
  *
+ * Configuration comes in two layers with the same shape: this row's `config`
+ * in the profile's `cordis.patch.yml`, and an optional
+ * `~/.dsh-tui/favors.json` — flat JSON carrying the same keys — that outranks
+ * it knob by knob. The file is re-read on every `pin` check, so a user can try
+ * another route without editing the profile or restarting; only values that
+ * survive validation override anything, and `enabled: false` on the row is a
+ * kill switch that stops the file from being read at all.
+ *
  * Runtime contract (see README):
  *  - `apply` is synchronous and never throws: the profile composition waits
  *    for this row before dsh-TUI resolves the boot route, and a thrown error
@@ -25,7 +33,7 @@
  */
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 
 /** Cordis plugin name (the loader row's `name`). */
 export const name = 'dsh-tui-favors'
@@ -51,6 +59,14 @@ const PERMISSION_ID = /^[a-z0-9_.:/-]+$/iu
 const RESERVED_PERMISSIONS = new Set(['auto', 'custom', 'status'])
 /** Default poll interval for `pin` mode, in milliseconds. */
 const DEFAULT_POLL_MS = 2000
+/** User-owned favorites file, read on top of the row config (`~/.dsh-tui/favors.json`). */
+const FAVORS_FILE = 'favors.json'
+/** A pathological favorites file is refused instead of parsed. */
+const MAX_FILE_BYTES = 64 * 1024
+/** Keys the row — and therefore the favorites file — understands. */
+const KNOWN_KEYS = ['enabled', 'provider', 'model', 'effort', 'preset', 'permission', 'pin', 'pollMs']
+/** Keys a JSON value must spell as a string; a number or `null` there is a typo. */
+const STRING_KEYS = ['provider', 'model', 'effort', 'preset', 'permission']
 
 /* ------------------------------------------------------------------ *
  * Paths
@@ -89,6 +105,62 @@ function isSafeText(value) {
 }
 
 /**
+ * Whether a value is a plain JSON-ish object (not null, not an array).
+ * @param value - Candidate.
+ * @returns True when it can carry keys.
+ */
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+/**
+ * Interpret one knob out of a raw config object. The single parser shared by
+ * the row config and the favorites file, so both layers accept exactly the
+ * same values.
+ * @param knob - Which knob to read.
+ * @param raw - Raw config object.
+ * @returns `undefined` when absent, `{ value }` when usable, `{ problem }` when present but unusable.
+ */
+function parseKnob(knob, raw) {
+  switch (knob) {
+    case 'model': {
+      const provider = typeof raw.provider === 'string' ? raw.provider.trim() : undefined
+      const model = typeof raw.model === 'string' ? raw.model.trim() : undefined
+      if (provider === undefined && model === undefined) return undefined
+      if (!isSafeText(provider) || !isSafeText(model)) {
+        return { problem: 'model: `provider` and `model` must both be filled in (a half route is never written)' }
+      }
+      return { value: { provider, model } }
+    }
+    case 'effort': {
+      const effort = typeof raw.effort === 'string' ? raw.effort.trim() : undefined
+      if (effort === undefined) return undefined
+      if (!EFFORT_ID.test(effort)) {
+        return { problem: `effort: "${effort}" is not a tier id (letters, digits, dot, underscore, dash)` }
+      }
+      return { value: effort }
+    }
+    case 'preset': {
+      const preset = typeof raw.preset === 'string' ? raw.preset.trim() : undefined
+      if (preset === undefined) return undefined
+      if (!PRESET_ID.test(preset)) return { problem: `preset: "${preset}" is not a preset id (lowercase, digits, dash)` }
+      return { value: preset }
+    }
+    case 'permission': {
+      const permission = typeof raw.permission === 'string' ? raw.permission.trim() : undefined
+      if (permission === undefined) return undefined
+      if (!PERMISSION_ID.test(permission)) return { problem: `permission: "${permission}" is not a command token` }
+      if (RESERVED_PERMISSIONS.has(permission)) {
+        return { problem: `permission: "${permission}" is session-only and never seeds a conversation` }
+      }
+      return { value: permission }
+    }
+    default:
+      return undefined
+  }
+}
+
+/**
  * Validate and normalize the row config. Never throws: a bad value is dropped
  * with one human-readable problem line, so a typo in `cordis.patch.yml` cannot
  * break the boot or write junk into a preference file.
@@ -96,39 +168,15 @@ function isSafeText(value) {
  * @returns `{ enabled, pin, pollMs, favorites, problems }`.
  */
 export function resolveConfig(input) {
-  const raw = input !== null && typeof input === 'object' && !Array.isArray(input) ? input : {}
-  /** @type {Record<string, unknown>} */
+  const raw = isPlainObject(input) ? input : {}
   const favorites = {}
-  /** @type {string[]} */
   const problems = []
 
-  const provider = typeof raw.provider === 'string' ? raw.provider.trim() : undefined
-  const model = typeof raw.model === 'string' ? raw.model.trim() : undefined
-  if (provider !== undefined || model !== undefined) {
-    if (!isSafeText(provider) || !isSafeText(model)) {
-      problems.push('model: `provider` and `model` must both be filled in (a half route is never written)')
-    } else {
-      favorites.model = { provider, model }
-    }
-  }
-
-  const effort = typeof raw.effort === 'string' ? raw.effort.trim() : undefined
-  if (effort !== undefined) {
-    if (!EFFORT_ID.test(effort)) problems.push(`effort: "${effort}" is not a tier id (letters, digits, dot, underscore, dash)`)
-    else favorites.effort = effort
-  }
-
-  const preset = typeof raw.preset === 'string' ? raw.preset.trim() : undefined
-  if (preset !== undefined) {
-    if (!PRESET_ID.test(preset)) problems.push(`preset: "${preset}" is not a preset id (lowercase, digits, dash)`)
-    else favorites.preset = preset
-  }
-
-  const permission = typeof raw.permission === 'string' ? raw.permission.trim() : undefined
-  if (permission !== undefined) {
-    if (!PERMISSION_ID.test(permission)) problems.push(`permission: "${permission}" is not a command token`)
-    else if (RESERVED_PERMISSIONS.has(permission)) problems.push(`permission: "${permission}" is session-only and never seeds a conversation`)
-    else favorites.permission = permission
+  for (const knob of KNOBS) {
+    const parsed = parseKnob(knob, raw)
+    if (parsed === undefined) continue
+    if (parsed.problem !== undefined) problems.push(parsed.problem)
+    else favorites[knob] = parsed.value
   }
 
   const pin = raw.pin !== false
@@ -136,6 +184,187 @@ export function resolveConfig(input) {
   const pollMs = Number.isFinite(pollRaw) ? Math.max(250, Math.round(pollRaw)) : DEFAULT_POLL_MS
 
   return { enabled: raw.enabled !== false, pin, pollMs, favorites, problems }
+}
+
+/* ------------------------------------------------------------------ *
+ * The user's favorites file (`~/.dsh-tui/favors.json`)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Cheapest possible change detector for the favorites file: one `stat`, no
+ * read, no parse. `pin` mode calls this on every check.
+ * @param dir - Data directory.
+ * @returns `missing`, `not-a-file`, or `<mtime>:<size>`.
+ */
+export function favorsStamp(dir = dataDir()) {
+  try {
+    const stat = statSync(join(dir, FAVORS_FILE))
+    return stat.isFile() ? `${stat.mtimeMs}:${stat.size}` : 'not-a-file'
+  } catch {
+    return 'missing'
+  }
+}
+
+/**
+ * One-line reason out of an error, safe to put in a report line.
+ * @param error - Thrown value.
+ * @returns Trimmed, newline-free message.
+ */
+function shortMessage(error) {
+  const text = error instanceof Error ? error.message : String(error)
+  return text.replace(/\s+/gu, ' ').trim().slice(0, 200)
+}
+
+/**
+ * Read and validate `~/.dsh-tui/favors.json`. Never throws and never guesses:
+ * a broken file is reported as a whole, and a knob whose value is unusable is
+ * dropped with one problem line, so the caller falls back to the row config
+ * instead of pinning half an intent.
+ *
+ * The file shape is the row's `config:` block, flat:
+ * `{ "provider": "…", "model": "…", "effort": "max", "pin": true }`.
+ * @param dir - Data directory.
+ * @returns `{ path, stamp, state, applied, problems, keys, mtimeMs?, size? }`.
+ */
+export function readFavorsFile(dir = dataDir()) {
+  const path = join(dir, FAVORS_FILE)
+  const stamp = favorsStamp(dir)
+  const absent = { path, stamp, state: 'missing', applied: {}, problems: [], keys: 0 }
+
+  let stat
+  try {
+    stat = statSync(path)
+  } catch {
+    return absent
+  }
+  if (!stat.isFile()) {
+    return { ...absent, state: 'invalid', problems: [`${FAVORS_FILE}: not a regular file — ignored`] }
+  }
+  if (stat.size > MAX_FILE_BYTES) {
+    return {
+      ...absent,
+      state: 'invalid',
+      size: stat.size,
+      problems: [`${FAVORS_FILE}: ${stat.size} bytes exceeds the ${MAX_FILE_BYTES}-byte limit — ignored`],
+    }
+  }
+
+  let text
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch (error) {
+    return { ...absent, state: 'invalid', problems: [`${FAVORS_FILE}: cannot be read (${shortMessage(error)}) — ignored`] }
+  }
+
+  const invalid = (problem) => ({ ...absent, state: 'invalid', problems: [`${FAVORS_FILE}: ${problem}`] })
+  // A BOM is the one thing every Windows editor adds; tolerate it.
+  const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+  if (body.trim() === '') return invalid('is empty — ignored')
+
+  let root
+  try {
+    root = JSON.parse(body)
+  } catch (error) {
+    return invalid(`is not valid JSON (${shortMessage(error)}) — ignored`)
+  }
+  if (!isPlainObject(root)) {
+    const shape = Array.isArray(root) ? 'an array' : root === null ? 'null' : typeof root
+    return invalid(`the root must be a JSON object (got ${shape}) — ignored`)
+  }
+  // The most likely copy/paste mistake: the whole cordis.patch.yml row instead
+  // of just its `config:` block. Say that, rather than "unknown key: config".
+  if (isPlainObject(root.config)) {
+    return invalid('wraps the values in a `config` object — keep only the keys inside it')
+  }
+
+  const values = {}
+  const problems = []
+  for (const [key, value] of Object.entries(root)) {
+    // `_comment`-style keys are the documented way to annotate strict JSON.
+    if (key.startsWith('_')) continue
+    if (!KNOWN_KEYS.includes(key)) {
+      problems.push(`${FAVORS_FILE}: unknown key "${key}" (allowed: ${KNOWN_KEYS.join(', ')})`)
+      continue
+    }
+    if (STRING_KEYS.includes(key) && typeof value !== 'string') {
+      problems.push(`${FAVORS_FILE}: "${key}" must be a string — ignored`)
+      continue
+    }
+    values[key] = value
+  }
+
+  const applied = {}
+  for (const knob of KNOBS) {
+    const parsed = parseKnob(knob, values)
+    if (parsed === undefined) continue
+    if (parsed.problem !== undefined) problems.push(`${FAVORS_FILE}: ${parsed.problem} — ignored`)
+    else applied[knob] = parsed.value
+  }
+  for (const key of ['enabled', 'pin']) {
+    if (!(key in values)) continue
+    if (typeof values[key] === 'boolean') applied[key] = values[key]
+    else problems.push(`${FAVORS_FILE}: "${key}" must be true or false — ignored`)
+  }
+  if ('pollMs' in values) {
+    if (typeof values.pollMs === 'number' && Number.isFinite(values.pollMs)) {
+      applied.pollMs = Math.max(250, Math.round(values.pollMs))
+    } else {
+      problems.push(`${FAVORS_FILE}: "pollMs" must be a number — ignored`)
+    }
+  }
+
+  return {
+    path,
+    stamp,
+    state: 'ok',
+    applied,
+    problems,
+    keys: Object.keys(values).length,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+  }
+}
+
+/**
+ * Resolve the effective config: the favorites file wins knob by knob over the
+ * row config, which wins over the built-in defaults. Only values that survive
+ * validation override anything — a typo falls back to the row instead of
+ * silently un-pinning a knob.
+ * @param rowInput - Raw row config from the composition.
+ * @param dir - Data directory.
+ * @returns `{ config, sources, file }`; `sources` maps `enabled`/knobs to the layer that supplied them.
+ */
+export function loadConfig(rowInput, dir = dataDir()) {
+  const row = isPlainObject(rowInput) ? rowInput : {}
+  let file
+  try {
+    file = readFavorsFile(dir)
+  } catch {
+    file = { path: join(dir, FAVORS_FILE), stamp: 'missing', state: 'missing', applied: {}, problems: [], keys: 0 }
+  }
+  const fromRow = resolveConfig(row)
+
+  const favorites = {}
+  const sources = {}
+  for (const knob of KNOBS) {
+    if (file.applied[knob] !== undefined) {
+      favorites[knob] = file.applied[knob]
+      sources[knob] = FAVORS_FILE
+    } else if (fromRow.favorites[knob] !== undefined) {
+      favorites[knob] = fromRow.favorites[knob]
+      sources[knob] = 'profile row'
+    }
+  }
+  sources.enabled = file.applied.enabled === undefined ? 'profile row' : FAVORS_FILE
+
+  const config = {
+    enabled: file.applied.enabled ?? fromRow.enabled,
+    pin: file.applied.pin ?? fromRow.pin,
+    pollMs: file.applied.pollMs ?? fromRow.pollMs,
+    favorites,
+    problems: [...fromRow.problems, ...file.problems],
+  }
+  return { config, sources, file }
 }
 
 /* ------------------------------------------------------------------ *
@@ -287,9 +516,10 @@ function readSettingsEffortDefault() {
  * @param dir - Data directory.
  * @param knob - Which knob.
  * @param desired - Pinned value.
+ * @param source - Which layer supplied the pinned value, if any.
  * @returns Rendered line.
  */
-function knobLine(dir, knob, desired) {
+function knobLine(dir, knob, desired, source) {
   const current = readPref(dir, knob)
   const show = (value) => {
     if (value === undefined) return '—'
@@ -297,7 +527,22 @@ function knobLine(dir, knob, desired) {
   }
   if (desired === undefined) return `${knob}: not pinned (file: ${show(current)})`
   const state = samePref(knob, current, desired) ? 'pinned' : 'differs — restored on the next check'
-  return `${knob}: ${show(desired)} (${state})`
+  const tag = source === undefined ? '' : ` [${source}]`
+  return `${knob}: ${show(desired)} (${state})${tag}`
+}
+
+/**
+ * One line telling the reader which config layers were in play.
+ * @param file - Result of `readFavorsFile`.
+ * @returns Rendered line, or undefined when the caller has no file information.
+ */
+function describeFile(file) {
+  if (file === undefined) return undefined
+  if (file.state === 'missing') return `no ${FAVORS_FILE} — using the profile row`
+  if (file.state === 'invalid') return `${FAVORS_FILE} ignored (see config lines) — using the profile row`
+  const count = `${file.keys} key${file.keys === 1 ? '' : 's'}`
+  const when = Number.isFinite(file.mtimeMs) ? `, mtime ${new Date(file.mtimeMs).toISOString()}` : ''
+  return `${FAVORS_FILE} (${count}${when}) > profile row`
 }
 
 /**
@@ -305,22 +550,26 @@ function knobLine(dir, knob, desired) {
  * @param options - Report inputs.
  * @returns Multi-line plain text.
  */
-export function renderStatus({ config, dir, running }) {
+export function renderStatus({ config, dir, running, sources = {}, file }) {
   const lines = []
   const favorites = config.favorites
   const pinned = KNOBS.filter(knob => favorites[knob] !== undefined)
   if (!config.enabled) {
-    lines.push('dsh-tui-favors: disabled in the profile config (writes nothing).')
+    const where = sources.enabled === FAVORS_FILE ? ` by ${FAVORS_FILE}` : ' in the profile config'
+    lines.push(`dsh-tui-favors: disabled${where} (writes nothing).`)
     return lines.join('\n')
   }
   if (pinned.length === 0) {
     lines.push('dsh-tui-favors: no favorites configured — dsh-TUI keeps its own remembered preferences.')
-    lines.push('Set provider/model, effort, preset and/or permission on the `dsh-tui-favors` row in the profile cordis.patch.yml.')
+    lines.push('Set provider/model, effort, preset and/or permission on the `dsh-tui-favors` row in the profile cordis.patch.yml,')
+    lines.push(`or in ${join(dir, FAVORS_FILE)} — that file outranks the row and applies without a restart.`)
     return lines.join('\n')
   }
   lines.push(`dsh-tui-favors: ${pinned.join(' · ')} · mode ${config.pin ? `pin (${config.pollMs} ms)` : 'startup'}${running ? '' : ' · poll stopped'}`)
-  for (const knob of KNOBS) lines.push('  ' + knobLine(dir, knob, favorites[knob]))
+  for (const knob of KNOBS) lines.push('  ' + knobLine(dir, knob, favorites[knob], sources[knob]))
   lines.push(`  files: ${dir}`)
+  const described = describeFile(file)
+  if (described !== undefined) lines.push(`  source: ${described}`)
   for (const note of precedenceNotes(favorites)) lines.push('  note: ' + note)
   for (const problem of config.problems) lines.push('  config: ' + problem)
   return lines.join('\n')
@@ -332,16 +581,17 @@ export function renderStatus({ config, dir, running }) {
 
 /**
  * Mount the plugin: write the favorites once (before dsh-TUI resolves the boot
- * route) and keep them pinned while the TUI runs.
+ * route) and keep them pinned while the TUI runs. `~/.dsh-tui/favors.json`
+ * outranks the row config and is re-read when it changes.
  * @param ctx - Host Cordis context of this row.
  * @param input - Raw row config.
  */
 export function apply(ctx, input) {
-  let config
+  let row
   try {
-    config = resolveConfig(input)
+    row = isPlainObject(input) ? input : {}
   } catch {
-    config = resolveConfig({})
+    row = {}
   }
 
   const info = (message) => {
@@ -352,12 +602,53 @@ export function apply(ctx, input) {
     }
   }
 
-  if (!config.enabled) {
-    info('disabled by config; nothing pinned')
+  // The row's `enabled: false` is a deployment-level kill switch: a user file
+  // must not resurrect a plugin the deployment turned off, so it is not read.
+  if (row.enabled === false) {
+    info(`disabled by the profile row; ${FAVORS_FILE} is not read`)
     return
   }
 
   const dir = dataDir()
+
+  let loaded
+  try {
+    loaded = loadConfig(row, dir)
+  } catch {
+    loaded = {
+      config: resolveConfig(row),
+      sources: {},
+      file: { path: join(dir, FAVORS_FILE), stamp: 'missing', state: 'missing', applied: {}, problems: [], keys: 0 },
+    }
+  }
+
+  /** Problems already logged, so a bad file does not log on every check. */
+  const reported = new Set()
+  const reportProblems = () => {
+    for (const problem of loaded.config.problems) {
+      if (reported.has(problem)) continue
+      reported.add(problem)
+      info(problem)
+    }
+  }
+  reportProblems()
+
+  /**
+   * Re-read the favorites file when it changed. One `stat` when it did not, so
+   * editing the JSON applies without a restart.
+   * @returns True when the config was reloaded.
+   */
+  const refresh = () => {
+    try {
+      if (favorsStamp(dir) === loaded.file.stamp) return false
+      loaded = loadConfig(row, dir)
+      reportProblems()
+      info(`${FAVORS_FILE} reloaded (${Object.keys(loaded.config.favorites).length} pinned)`)
+      return true
+    } catch {
+      return false
+    }
+  }
 
   /** Last reported failure signature, so a broken data dir logs once. */
   let lastFailure
@@ -368,11 +659,24 @@ export function apply(ctx, input) {
     info(`could not write ${failed.join(', ')} under ${dir} — dsh-TUI keeps its own preference`)
   }
 
+  /** Whether the "writes nothing" notice was already logged. */
+  let disabledLogged = false
+
   /**
-   * Re-assert the favorites, reporting only changes.
-   * @returns The applied/kept/failed lists.
+   * Re-assert every configured favorite once, reporting only changes. Honours
+   * `enabled` but not `pin`: this is also the boot write, which happens once
+   * even when `pin` is off.
+   * @returns `{ written, kept, failed }` knob lists.
    */
-  const reconcile = () => {
+  const writeOnce = () => {
+    const config = loaded.config
+    if (!config.enabled) {
+      if (!disabledLogged) {
+        disabledLogged = true
+        info(`disabled by ${loaded.sources.enabled === FAVORS_FILE ? FAVORS_FILE : 'the profile row'}; nothing pinned`)
+      }
+      return { written: [], kept: [], failed: [] }
+    }
     let result
     try {
       result = applyFavorites(config.favorites, dir)
@@ -384,16 +688,26 @@ export function apply(ctx, input) {
     return result
   }
 
-  // The boot write must stay synchronous: dsh-TUI's runtime row waits for this
-  // loader tree to settle before it reads the same files for its first session.
-  const first = reconcile()
-  if (first.written.length === 0 && first.failed.length === 0) {
-    info(`favorites already in place (${Object.keys(config.favorites).join(', ') || 'none'})`)
+  /**
+   * The `pin` check: pick up a changed favorites file, then restore drift.
+   * @returns `{ written, kept, failed }` knob lists.
+   */
+  const tick = () => {
+    refresh()
+    if (!loaded.config.pin) return { written: [], kept: [], failed: [] }
+    return writeOnce()
   }
 
-  if (config.pin && Object.keys(config.favorites).length > 0) {
+  // The boot write must stay synchronous: dsh-TUI's runtime row waits for this
+  // loader tree to settle before it reads the same files for its first session.
+  const first = writeOnce()
+  if (first.written.length === 0 && first.failed.length === 0 && loaded.config.enabled) {
+    info(`favorites already in place (${Object.keys(loaded.config.favorites).join(', ') || 'none'})`)
+  }
+
+  if (loaded.config.pin && Object.keys(loaded.config.favorites).length > 0) {
     ctx.effect(() => {
-      const timer = setInterval(reconcile, config.pollMs)
+      const timer = setInterval(tick, loaded.config.pollMs)
       timer.unref?.()
       return () => clearInterval(timer)
     })
@@ -408,20 +722,34 @@ export function apply(ctx, input) {
         handler: async (invocation) => {
           const argument = String(invocation.rawInput ?? '').trim()
           if (argument === 'apply') {
-            const result = applyFavorites(config.favorites, dir)
+            refresh()
+            const result = writeOnce()
             const parts = []
             if (result.written.length > 0) parts.push(`wrote ${result.written.join(', ')}`)
             if (result.kept.length > 0) parts.push(`already in place: ${result.kept.join(', ')}`)
             if (result.failed.length > 0) parts.push(`failed: ${result.failed.join(', ')}`)
+            const text = loaded.config.enabled
+              ? parts.join('; ') || 'nothing configured'
+              : `disabled by ${loaded.sources.enabled === FAVORS_FILE ? FAVORS_FILE : 'the profile row'}`
             return {
               kind: result.failed.length > 0 ? 'error' : 'success',
-              text: `dsh-tui-favors: ${parts.join('; ') || 'nothing configured'}`,
+              text: `dsh-tui-favors: ${text}`,
             }
           }
           if (argument !== '' && argument !== 'status') {
             return { kind: 'error', text: 'dsh-tui-favors: usage — /favors [status|apply]' }
           }
-          return { kind: 'success', text: renderStatus({ config, dir, running: config.pin }) }
+          refresh()
+          return {
+            kind: 'success',
+            text: renderStatus({
+              config: loaded.config,
+              dir,
+              running: loaded.config.pin,
+              sources: loaded.sources,
+              file: loaded.file,
+            }),
+          }
         },
       })
     } catch (error) {
