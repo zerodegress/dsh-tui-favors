@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-09
+
+### Changed
+
+- Declared compatible with dsh 0.2.2-rc.1, which ships Cordis 4.1.0. No code
+  change: the plugin touches no DSH service, it only writes and watches the
+  preference files dsh-TUI reads at boot.
 ## [0.2.0] - 2026-10-24
 
 ### Added
